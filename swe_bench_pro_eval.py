@@ -378,7 +378,7 @@ def eval_with_docker(patch, sample, output_dir, dockerhub_username, scripts_dir,
         dockerhub_image_uri = get_dockerhub_image_uri(uid, dockerhub_username, sample.get("repo", ""))
         print(f"Using Docker Hub image: {dockerhub_image_uri}")
 
-        client = docker.from_env()
+        client = docker.from_env(timeout=600)
         try:
             if docker_platform:
                 client.images.pull(dockerhub_image_uri, platform=docker_platform)
