@@ -191,9 +191,25 @@ def create_entryscript(sample):
 {env_cmds}
 # apply patch
 cd /app
-git reset --hard {base_commit}
-git checkout {base_commit}
-git apply -v /workspace/patch.diff
+PATCH_APPLY_STATUS=/workspace/patch_apply_status.json
+PATCH_APPLY_STDERR=/workspace/patch_apply.stderr
+if ! git reset --hard {base_commit}; then
+  printf '%s\n' '{{"success": false, "stage": "reset"}}' > "$PATCH_APPLY_STATUS"
+  exit 80
+fi
+if ! git checkout {base_commit}; then
+  printf '%s\n' '{{"success": false, "stage": "checkout"}}' > "$PATCH_APPLY_STATUS"
+  exit 81
+fi
+if ! git apply --check /workspace/patch.diff 2> "$PATCH_APPLY_STDERR"; then
+  printf '%s\n' '{{"success": false, "stage": "check"}}' > "$PATCH_APPLY_STATUS"
+  exit 82
+fi
+if ! git apply -v /workspace/patch.diff 2> "$PATCH_APPLY_STDERR"; then
+  printf '%s\n' '{{"success": false, "stage": "apply"}}' > "$PATCH_APPLY_STATUS"
+  exit 83
+fi
+printf '%s\n' '{{"success": true, "stage": "applied"}}' > "$PATCH_APPLY_STATUS"
 {before_repo_set_cmd}
 # run test and save stdout and stderr to separate files
 bash /workspace/run_script.sh {selected_test_files_to_run} > /workspace/stdout.log 2> /workspace/stderr.log
@@ -456,17 +472,18 @@ def eval_with_docker(patch, sample, output_dir, dockerhub_username, scripts_dir,
 
         client = docker.from_env(timeout=600)
         try:
-            if docker_platform:
-                client.images.pull(dockerhub_image_uri, platform=docker_platform)
-            else:
-                client.images.pull(dockerhub_image_uri)
-        except Exception as pull_err:
-            # If pull fails, fall back to a local image if present; otherwise, fail this run
+            client.images.get(dockerhub_image_uri)
+            print(f"Using locally cached Docker image: {dockerhub_image_uri}")
+        except Exception:
             try:
-                client.images.get(dockerhub_image_uri)
-                print(f"Using locally available image: {dockerhub_image_uri}")
-            except Exception:
-                print(f"Failed to pull or find image locally for {uid}: {pull_err}")
+                if docker_platform:
+                    client.images.pull(
+                        dockerhub_image_uri, platform=docker_platform
+                    )
+                else:
+                    client.images.pull(dockerhub_image_uri)
+            except Exception as pull_err:
+                print(f"Failed to pull image for {uid}: {pull_err}")
                 return None
 
         abs_workspace_dir = os.path.abspath(workspace_dir)
