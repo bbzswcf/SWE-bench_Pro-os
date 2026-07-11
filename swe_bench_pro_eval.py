@@ -53,6 +53,82 @@ from tqdm import tqdm
 
 from helper_code.image_uri import get_dockerhub_image_uri
 
+
+TIMING_SENSITIVE_WORKERS = 4
+
+# These instances either exhibited load-sensitive timeouts in repeated local
+# evaluations or contain unusually tight timing assertions. Keep the list
+# precise so unrelated instances still use the requested concurrency.
+TIMING_SENSITIVE_INSTANCE_IDS = frozenset(
+    {
+        # Tutanota instances whose selected tests include RestClientTest.js.
+        "instance_tutao__tutanota-da4edb7375c10f47f4ed3860a591c5e6557f7b5c-vbc0d9ba8f0071fbe982809910959a6ff8884dbbf",
+        "instance_tutao__tutanota-09c2776c0fce3db5c6e18da92b5a45dce9f013aa-vbc0d9ba8f0071fbe982809910959a6ff8884dbbf",
+        "instance_tutao__tutanota-1e516e989b3c0221f4af6b297d9c0e4c43e4adc3-vbc0d9ba8f0071fbe982809910959a6ff8884dbbf",
+        "instance_tutao__tutanota-f3ffe17af6e8ab007e8d461355057ad237846d9d-vbc0d9ba8f0071fbe982809910959a6ff8884dbbf",
+        "instance_tutao__tutanota-fbdb72a2bd39b05131ff905780d9d4a2a074de26-vbc0d9ba8f0071fbe982809910959a6ff8884dbbf",
+        "instance_tutao__tutanota-fb32e5f9d9fc152a00144d56dd0af01760a2d4dc-vc4e41fd0029957297843cb9dec4a25c7c756f029",
+        "instance_tutao__tutanota-b4934a0f3c34d9d7649e944b183137e8fad3e859-vbc0d9ba8f0071fbe982809910959a6ff8884dbbf",
+        "instance_tutao__tutanota-fe240cbf7f0fdd6744ef7bef8cb61676bcdbb621-vc4e41fd0029957297843cb9dec4a25c7c756f029",
+        "instance_tutao__tutanota-40e94dee2bcec2b63f362da283123e9df1874cc1-vc4e41fd0029957297843cb9dec4a25c7c756f029",
+        "instance_tutao__tutanota-befce4b146002b9abc86aa95f4d57581771815ce-vee878bb72091875e912c52fc32bc60ec3760227b",
+        "instance_tutao__tutanota-12a6cbaa4f8b43c2f85caca0787ab55501539955-vc4e41fd0029957297843cb9dec4a25c7c756f029",
+        "instance_tutao__tutanota-db90ac26ab78addf72a8efaff3c7acc0fbd6d000-vbc0d9ba8f0071fbe982809910959a6ff8884dbbf",
+        "instance_tutao__tutanota-219bc8f05d7b980e038bc1524cb021bf56397a1b-vee878bb72091875e912c52fc32bc60ec3760227b",
+        "instance_tutao__tutanota-8513a9e8114a8b42e64f4348335e0f23efa054c4-vee878bb72091875e912c52fc32bc60ec3760227b",
+        "instance_tutao__tutanota-1ff82aa365763cee2d609c9d19360ad87fdf2ec7-vc4e41fd0029957297843cb9dec4a25c7c756f029",
+        "instance_tutao__tutanota-d1aa0ecec288bfc800cfb9133b087c4f81ad8b38-vbc0d9ba8f0071fbe982809910959a6ff8884dbbf",
+        "instance_tutao__tutanota-4b4e45949096bb288f2b522f657610e480efa3e8-vee878bb72091875e912c52fc32bc60ec3760227b",
+        # Other observed or statically identified timing-sensitive instances.
+        "instance_NodeBB__NodeBB-51d8f3b195bddb13a13ddc0de110722774d9bb1b-vf2cf3cbd463b7ad942381f1c6d077626485a1e9e",
+        "instance_ansible__ansible-40ade1f84b8bb10a63576b0ac320c13f57c87d34-v6382ea168a93d80a64aab1fbd8c4f02dc5ada5bf",
+        "instance_element-hq__element-web-fe14847bb9bb07cab1b9c6c54335ff22ca5e516a-vnan",
+        "instance_gravitational__teleport-0ecf31de0e98b272a6a2610abe1bbedd379a38a3-vce94f93ad1030e3136852817f2423c1b3ac37bc4",
+        "instance_gravitational__teleport-1316e6728a3ee2fc124e2ea0cc6a02044c87a144-v626ec2a48416b10a88641359a169d99e935ff037",
+        "instance_gravitational__teleport-4f771403dc4177dc26ee0370f7332f3fe54bee0f-vee9b09fb20c43af7e520f57e9239bbcf46b7113d",
+        "instance_gravitational__teleport-629dc432eb191ca479588a8c49205debb83e80e2",
+        "instance_gravitational__teleport-78b0d8c72637df1129fb6ff84fc49ef4b5ab1288",
+        "instance_gravitational__teleport-bb562408da4adeae16e025be65e170959d1ec492-vee9b09fb20c43af7e520f57e9239bbcf46b7113d",
+        "instance_gravitational__teleport-e6681abe6a7113cfd2da507f05581b7bdf398540-v626ec2a48416b10a88641359a169d99e935ff037",
+        "instance_gravitational__teleport-e6d86299a855687b21970504fbf06f52a8f80c74-vce94f93ad1030e3136852817f2423c1b3ac37bc4",
+        "instance_navidrome__navidrome-29b7b740ce469201af0a0510f3024adc93ef4c8e",
+        "instance_navidrome__navidrome-29bc17acd71596ae92131aca728716baf5af9906",
+        "instance_navidrome__navidrome-3972616585e82305eaf26aa25697b3f5f3082288",
+        "instance_navidrome__navidrome-3bc9e75b2843f91f6a1e9b604e321c2bd4fd442a",
+    }
+)
+
+
+def plan_evaluation_phases(patches, requested_workers):
+    """Split timing-sensitive instances into a quiet, four-worker phase."""
+    if requested_workers < 1:
+        raise ValueError("--num_workers must be at least 1")
+
+    if requested_workers < TIMING_SENSITIVE_WORKERS:
+        return [("all instances", patches, requested_workers)]
+
+    regular_patches = []
+    timing_sensitive_patches = []
+    for patch in patches:
+        if patch["instance_id"] in TIMING_SENSITIVE_INSTANCE_IDS:
+            timing_sensitive_patches.append(patch)
+        else:
+            regular_patches.append(patch)
+
+    phases = []
+    if regular_patches:
+        phases.append(("regular instances", regular_patches, requested_workers))
+    if timing_sensitive_patches:
+        phases.append(
+            (
+                "timing-sensitive instances",
+                timing_sensitive_patches,
+                TIMING_SENSITIVE_WORKERS,
+            )
+        )
+    return phases
+
+
 # Credit: prabhuteja12
 def load_base_docker(iid):
     with open(f"dockerfiles/base_dockerfile/{iid}/Dockerfile") as fp:
@@ -516,56 +592,93 @@ def main():
 
     eval_fn = eval_with_docker if args.use_local_docker else eval_with_modal
 
-    # Use ThreadPoolExecutor to run evaluations in parallel
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.num_workers) as executor:
-        # Create a dictionary mapping futures to their patch samples for progress tracking
-        future_to_patch = {
-            executor.submit(
-                eval_fn,
-                patch_sample.get("model_patch", patch_sample.get("patch", "")),
-                raw_sample_df.loc[patch_sample["instance_id"]],
-                args.output_dir,
-                args.dockerhub_username,
-                args.scripts_dir,
-                prefix=patch_sample.get("prefix", ""),
-                redo=args.redo,
-                block_network=args.block_network,
-                docker_platform=(args.docker_platform or detected_platform) if args.use_local_docker else None,
-            ): patch_sample
-            for patch_sample in valid_patches
-        }
+    phases = plan_evaluation_phases(valid_patches, args.num_workers)
+    if len(phases) > 1:
+        regular_count = len(phases[0][1])
+        sensitive_count = len(phases[1][1])
+        print(
+            "Evaluation will run in two sequential phases: "
+            f"{regular_count} regular instances with {args.num_workers} workers, "
+            f"then {sensitive_count} timing-sensitive instances with "
+            f"{TIMING_SENSITIVE_WORKERS} workers."
+        )
 
-        # Track progress with tqdm and show running accuracy
-        pbar = tqdm(concurrent.futures.as_completed(future_to_patch), total=len(valid_patches))
-        for future in pbar:
-            patch_sample = future_to_patch[future]
-            try:
-                # Get the result (if any error occurred, it will be raised here)
-                output = future.result()
-                if output is None:
-                    print(f'Evaluation for {patch_sample["instance_id"]} returned None')
-                    eval_results[patch_sample["instance_id"]] = False
-                else:
-                    instance_id = patch_sample["instance_id"]
-                    if instance_id not in raw_sample_df.index:
-                        print(f'Warning: Instance {instance_id} not found in raw sample data, skipping')
-                        eval_results[instance_id] = False
+    # Each executor is closed before the next phase starts, so timing-sensitive
+    # instances never overlap with the regular high-concurrency workload.
+    for phase_name, phase_patches, phase_workers in phases:
+        print(
+            f"Starting {phase_name}: {len(phase_patches)} instances with "
+            f"{phase_workers} workers"
+        )
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=phase_workers
+        ) as executor:
+            # Create a dictionary mapping futures to their patch samples for progress tracking
+            future_to_patch = {
+                executor.submit(
+                    eval_fn,
+                    patch_sample.get("model_patch", patch_sample.get("patch", "")),
+                    raw_sample_df.loc[patch_sample["instance_id"]],
+                    args.output_dir,
+                    args.dockerhub_username,
+                    args.scripts_dir,
+                    prefix=patch_sample.get("prefix", ""),
+                    redo=args.redo,
+                    block_network=args.block_network,
+                    docker_platform=(args.docker_platform or detected_platform)
+                    if args.use_local_docker
+                    else None,
+                ): patch_sample
+                for patch_sample in phase_patches
+            }
+
+            # Track progress with tqdm and show running accuracy
+            pbar = tqdm(
+                concurrent.futures.as_completed(future_to_patch),
+                total=len(phase_patches),
+                desc=phase_name,
+            )
+            for future in pbar:
+                patch_sample = future_to_patch[future]
+                try:
+                    # Get the result (if any error occurred, it will be raised here)
+                    output = future.result()
+                    if output is None:
+                        print(
+                            f'Evaluation for {patch_sample["instance_id"]} returned None'
+                        )
+                        eval_results[patch_sample["instance_id"]] = False
                     else:
-                        raw_sample = raw_sample_df.loc[instance_id]
-                        passed_tests = {x["name"] for x in output["tests"] if x["status"] == "PASSED"}
-                        f2p = set(eval(raw_sample["fail_to_pass"]))
-                        p2p = set(eval(raw_sample["pass_to_pass"]))
-                        result = (f2p | p2p) <= passed_tests
-                        eval_results[instance_id] = result
+                        instance_id = patch_sample["instance_id"]
+                        if instance_id not in raw_sample_df.index:
+                            print(
+                                f"Warning: Instance {instance_id} not found in raw "
+                                "sample data, skipping"
+                            )
+                            eval_results[instance_id] = False
+                        else:
+                            raw_sample = raw_sample_df.loc[instance_id]
+                            passed_tests = {
+                                x["name"]
+                                for x in output["tests"]
+                                if x["status"] == "PASSED"
+                            }
+                            f2p = set(eval(raw_sample["fail_to_pass"]))
+                            p2p = set(eval(raw_sample["pass_to_pass"]))
+                            result = (f2p | p2p) <= passed_tests
+                            eval_results[instance_id] = result
 
-                current_accuracy = sum(eval_results.values()) / len(eval_results)
-                pbar.set_description(f"Accuracy: {current_accuracy:.2%}")
-            except Exception as exc:
-                print(f'Evaluation for {patch_sample["instance_id"]} generated an exception: {exc}')
-                eval_results[patch_sample["instance_id"]] = False
-                # Update progress bar description with current accuracy
-                current_accuracy = sum(eval_results.values()) / len(eval_results)
-                pbar.set_description(f"Accuracy: {current_accuracy:.2%}")
+                    current_accuracy = sum(eval_results.values()) / len(eval_results)
+                    pbar.set_description(f"Accuracy: {current_accuracy:.2%}")
+                except Exception as exc:
+                    print(
+                        f'Evaluation for {patch_sample["instance_id"]} generated '
+                        f"an exception: {exc}"
+                    )
+                    eval_results[patch_sample["instance_id"]] = False
+                    # Update progress bar description with current accuracy
+                    current_accuracy = sum(eval_results.values()) / len(eval_results)
+                    pbar.set_description(f"Accuracy: {current_accuracy:.2%}")
     with open(os.path.join(args.output_dir, "eval_results.json"), "w") as f:
         json.dump(eval_results, f)
     print("Overall accuracy: ", sum(eval_results.values()) / len(eval_results))
